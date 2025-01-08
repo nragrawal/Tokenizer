@@ -3,6 +3,7 @@ import json
 import regex as re
 from natsort import natsorted
 from tqdm import tqdm
+import gc  # For garbage collection
 
 # Add the Marathi regex pattern at the top level
 MARATHI_PATTERN = re.compile(r"""
@@ -27,16 +28,16 @@ def text_to_bytes(text):
         all_bytes.extend(bytes_tokens)
     return all_bytes
 
-def read_text_files(folder_path='train', limit=10):
-    # Check if the folder exists
+def read_text_files(folder_path='train', limit=50000, batch_size=1000):
+    """
+    Read text files in batches to manage memory
+    """
     if not os.path.exists(folder_path):
         print(f"Error: The folder '{folder_path}' does not exist.")
         return
     
-    # Get list of all files in the folder
+    # Get list of all files
     files = os.listdir(folder_path)
-    
-    # Filter for text files and sort them naturally
     text_files = natsorted([f for f in files if f.endswith(('.txt', '.text'))])
     
     if not text_files:
@@ -45,25 +46,39 @@ def read_text_files(folder_path='train', limit=10):
     
     # Take only the first 'limit' files
     text_files = text_files[:limit]
+    total_files = len(text_files)
     
-    # Initialize list to store all tokens
+    # Process files in batches
     all_tokens = []
     
-    # Read and print contents of each file
-    for file_name in text_files:
-        file_path = os.path.join(folder_path, file_name)
-        try:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                content = file.read()
-                # Convert text to bytes using Marathi-aware tokenization
-                tokens = text_to_bytes(content)
-                all_tokens.extend(tokens)
-        except Exception as e:
-            print(f"Error reading {file_name}: {str(e)}")
+    for i in tqdm(range(0, total_files, batch_size), desc="Processing files"):
+        batch_files = text_files[i:i + batch_size]
+        batch_tokens = []
+        
+        for file_name in batch_files:
+            file_path = os.path.join(folder_path, file_name)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    content = file.read()
+                    tokens = text_to_bytes(content)
+                    batch_tokens.extend(tokens)
+            except Exception as e:
+                print(f"Error reading {file_name}: {str(e)}")
+        
+        # Process batch
+        all_tokens.extend(batch_tokens)
+        
+        # Print batch statistics
+        if (i + batch_size) % 5000 == 0:
+            print(f"\nProcessed {i + len(batch_files)}/{total_files} files")
+            print(f"Current tokens: {len(all_tokens)}")
+            
+        # Garbage collection after each batch
+        gc.collect()
     
-    print("\n=== Combined Statistics ===")
-    print("Total number of tokens:", len(all_tokens))
-    print("First 100 tokens:", all_tokens[:100])
+    print("\n=== Final Statistics ===")
+    print(f"Total files processed: {total_files}")
+    print(f"Total tokens: {len(all_tokens)}")
     return all_tokens
 
 def get_stats(ids):
@@ -151,82 +166,84 @@ class Tokenizer:
         merges = {tuple(map(int, k.split(','))): v for k, v in serialized_merges.items()}
         return cls(merges)
 
+def train_tokenizer(vocab_size=5000, input_folder='train', output_file='model/tokenizer.json', file_limit=50000):
+    """
+    Train tokenizer on a large dataset
+    """
+    print("Reading files...")
+    all_tokens = read_text_files(folder_path=input_folder, limit=file_limit)
+    initial_len = len(all_tokens)
+    initial_bytes = sum(len(str(t).encode('utf-8')) for t in all_tokens)
+    
+    print("\nTraining tokenizer...")
+    num_merges = vocab_size - 256
+    ids = list(all_tokens)
+    merges = {}
+    
+    pbar = tqdm(range(num_merges), desc="Learning merges")
+    for i in pbar:
+        # Get statistics in chunks to save memory
+        stats = get_stats(ids)
+        pair = max(stats.items(), key=lambda x: x[1])[0]
+        idx = 256 + i
+        
+        # Apply merge
+        ids = merge(ids, pair, idx)
+        merges[pair] = idx
+        
+        # Show progress
+        if (i + 1) % 100 == 0:
+            current_ratio = initial_len / len(ids)
+            pbar.write(f"Iteration {i+1}: compression ratio: {current_ratio:.2f}X")
+        
+        # Garbage collection periodically
+        if (i + 1) % 1000 == 0:
+            gc.collect()
+        
+        # Save intermediate merges
+        if (i + 1) % 5000 == 0:
+            temp_tokenizer = Tokenizer(merges)
+            temp_tokenizer.save(f"{output_file}.checkpoint")
+    
+    # Create and save final tokenizer
+    final_tokenizer = Tokenizer(merges)
+    final_tokenizer.save(output_file)
+    
+    # Calculate final statistics
+    final_len = len(ids)
+    final_bytes = sum(len(str(t).encode('utf-8')) for t in ids)
+    token_ratio = initial_len / final_len
+    byte_ratio = initial_bytes / final_bytes
+    
+    print("\n=== Final Statistics ===")
+    print(f"Vocabulary size: {vocab_size}")
+    print(f"Initial tokens: {initial_len:,}")
+    print(f"Final tokens: {final_len:,}")
+    print(f"Initial bytes: {initial_bytes:,}")
+    print(f"Final bytes: {final_bytes:,}")
+    print(f"Token compression ratio: {token_ratio:.2f}X")
+    print(f"Byte compression ratio: {byte_ratio:.2f}X")
+    print(f"Saved tokenizer to: {output_file}")
+    
+    return final_tokenizer
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint', type=str, help='Path to tokenizer checkpoint')
-    parser.add_argument('--train', action='store_true', help='Train a new tokenizer')
-    parser.add_argument('--encode', type=str, help='Text to encode')
-    parser.add_argument('--decode', type=str, help='Comma-separated integers to decode')
+    parser.add_argument('--input', default='train', help='Input folder containing text files')
+    parser.add_argument('--output', default='model/tokenizer.json', help='Output tokenizer file')
+    parser.add_argument('--vocab-size', type=int, default=5000, help='Desired vocabulary size')
+    parser.add_argument('--file-limit', type=int, default=50000, help='Number of files to process')
+    parser.add_argument('--batch-size', type=int, default=1000, help='Batch size for processing files')
     args = parser.parse_args()
-
-    if args.train:
-        # Train new tokenizer
-        all_tokens = read_text_files(limit=100) 
-        initial_len = len(all_tokens)
-
-        # ---
-        vocab_size = 5000 # the desired final vocabulary size
-        num_merges = vocab_size - 256
-        ids = list(all_tokens) # copy so we don't destroy the original list
-
-        merges = {} # (int, int) -> int
-        pbar = tqdm(range(num_merges), desc="Merging tokens")
-        for i in pbar:
-            stats = get_stats(ids)
-            pair = max(stats, key=stats.get)
-            idx = 256 + i
-            ids = merge(ids, pair, idx)
-            merges[pair] = idx
-            current_ratio = initial_len / len(ids)
-            pbar.write(f"Iteration {i+1}: compression ratio: {current_ratio:.2f}X")
-
-        print("\nFinal Statistics:")
-        print("Initial tokens length:", initial_len)
-        print("Final ids length:", len(ids))
-        print(f"Final compression ratio: {initial_len / len(ids):.2f}X")
-
-        tokenizer = Tokenizer(merges)
-        
-        if args.checkpoint:
-            tokenizer.save(args.checkpoint)
-            print(f"Saved tokenizer to {args.checkpoint}")
-
-    elif args.encode or args.decode:
-        if not args.checkpoint:
-            print("Error: --checkpoint is required for encode/decode operations")
-            exit(1)
-        
-        # Load tokenizer for encoding/decoding
-        tokenizer = Tokenizer.load(args.checkpoint)
-        print(f"Loaded tokenizer from {args.checkpoint}")
-
-        if args.encode:
-            # Encode the provided text
-            encoded = tokenizer.encode(args.encode)
-            print(f"\nEncoding: {args.encode}")
-            print(f"Encoded tokens: {encoded}")
-
-        if args.decode:
-            # Decode the provided tokens
-            try:
-                tokens = [int(x.strip()) for x in args.decode.split(',')]
-                decoded = tokenizer.decode(tokens)
-                print(f"\nDecoding: {tokens}")
-                print(f"Decoded text: {decoded}")
-            except ValueError:
-                print("Error: decode argument should be comma-separated integers")
-                exit(1)
     
-    else:
-        parser.print_help()
-        exit(1)
-    # Test encode/decode
-    test_text = "नमस्कार, जग! ही एक चाचणी आहे."
-    encoded = tokenizer.encode(test_text)
-    decoded = tokenizer.decode(encoded)
-    print("\nEncoding/Decoding Test:")
-    print(f"Original: {test_text}")
-    print(f"Encoded: {encoded}")
-    print(f"Decoded: {decoded}")
-    print(f"Successful roundtrip: {test_text == decoded}")
+    # Create output directory if it doesn't exist
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    
+    # Train tokenizer
+    tokenizer = train_tokenizer(
+        vocab_size=args.vocab_size,
+        input_folder=args.input,
+        output_file=args.output,
+        file_limit=args.file_limit
+    )
