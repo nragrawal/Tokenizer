@@ -4,9 +4,7 @@ __pycache__/
 *$py.class
 
 # Training data
-train/
 data/
-*.txt
 !requirements.txt
 
 # Model checkpoints and intermediate files
