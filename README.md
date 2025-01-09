@@ -21,7 +21,7 @@ Simply enter Marathi text in the input box and see the tokenization results!
 Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
 
 ```
-python read_files.py \
+python tokenizer.py \
 --input train \ # Directory containing training files
 --output model/tokenizer.json \ # Output path for tokenizer
 --vocab-size 5000 \ # Size of vocabulary (default: 5000)
@@ -79,4 +79,4 @@ The tokenizer provides:
 - Token distribution statistics
 
 ## Hugging Face Space
-This tokenizer is also available as a Hugging Face Space for easy online usage : https://huggingface.co/spaces/sanket-s/marathi-tokenizer-demo
+This tokenizer is also available as a Hugging Face Space for easy online usage : https://[https://huggingface.co/spaces/nragrawal/marathi-tokenizer-new-space](https://huggingface.co/spaces/nragrawal/marathi-tokenizer-new-space)
