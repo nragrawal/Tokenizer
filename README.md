@@ -52,12 +52,13 @@ The training process shows:
 ```
 === Final Statistics ===
 Vocabulary size: 5000
-Initial tokens: 1,234,567
-Final tokens: 456,789
-Initial bytes: 3,703,701
-Final bytes: 1,370,367
-Token compression ratio: 2.70X
-Byte compression ratio: 2.70X
+Initial tokens: 2,499,413
+Final tokens: 302,236
+Initial bytes: 7,325,060
+Final bytes: 1,024,538
+Token compression ratio: 8.27X
+Byte compression ratio: 7.15X
+Saved tokenizer to: model/tokenizer_large.json
 ```
 
 ## Directory Structure
